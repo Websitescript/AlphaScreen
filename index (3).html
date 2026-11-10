@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AlphaScreen · Stock Screener &amp; Compare</title>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Space+Grotesk:wght@400;600;700&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+:root{--bg:#0b0f14;--p:#121922;--b:#243040;--t:#d6dee8;--m:#7d8b9b;--teal:#2dd4bf;--red:#ff6b5e;--gold:#e9b949}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--t);font:14px 'Space Grotesk',sans-serif}
+.mono,td,th,input,textarea,.k{font-family:'IBM Plex Mono',monospace}
+nav{display:flex;gap:14px;align-items:center;padding:10px 18px;background:var(--p);border-bottom:1px solid var(--b);position:sticky;top:0;z-index:5;flex-wrap:wrap}
+.logo{font-weight:700;font-size:18px;color:var(--teal)}.logo b{color:var(--gold)}
+nav a{color:var(--m);cursor:pointer;padding:4px 8px;border-radius:4px}nav a.on,nav a:hover{color:var(--t);background:#1b2633}
+input,textarea{background:#0b1117;border:1px solid var(--b);color:var(--t);padding:8px 10px;border-radius:5px;font-size:13px}
+input:focus,textarea:focus{outline:1px solid var(--teal)}
+button{background:var(--teal);color:#04201c;border:0;padding:8px 13px;border-radius:5px;font-weight:600;cursor:pointer;font-family:inherit}
+button.g{background:transparent;color:var(--t);border:1px solid var(--b)}button.g:hover{border-color:var(--teal)}
+#sw{position:relative;flex:1;min-width:220px;max-width:460px}#sw input{width:100%}
+#res{position:absolute;top:38px;left:0;right:0;background:var(--p);border:1px solid var(--b);border-radius:5px;max-height:320px;overflow:auto;display:none}
+#res div{padding:8px 10px;cursor:pointer;border-bottom:1px solid var(--b)}#res div:hover{background:#1b2633}#res small{color:var(--m)}
+main{max-width:1180px;margin:0 auto;padding:18px}
+.card{background:var(--p);border:1px solid var(--b);border-radius:8px;padding:16px;margin-bottom:16px}
+h1{margin:0;font-size:24px}h2{font-size:15px;margin:0 0 12px;color:var(--gold);text-transform:uppercase;letter-spacing:.06em}
+.sub{color:var(--m);margin-top:4px}.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center;justify-content:space-between}
+.up{color:var(--teal)}.dn{color:var(--red)}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:1px;background:var(--b);border:1px solid var(--b)}
+.grid div{background:var(--p);padding:10px 12px;display:flex;justify-content:space-between;gap:8px}.grid .k{color:var(--m)}
+.w{overflow-x:auto}table{border-collapse:collapse;width:100%;font-size:12.5px}
+th,td{padding:7px 10px;text-align:right;border-bottom:1px solid var(--b);white-space:nowrap}th:first-child,td:first-child{text-align:left}
+th{color:var(--m);font-weight:600}tr:hover td{background:#16202b}td.best{color:var(--teal);font-weight:600}
+.pc{display:grid;grid-template-columns:1fr 1fr;gap:16px}@media(max-width:700px){.pc{grid-template-columns:1fr}}
+li{margin:6px 0}.pro li::marker{color:var(--teal)}.con li::marker{color:var(--red)}
+.chip{display:inline-flex;gap:6px;align-items:center;background:#1b2633;border:1px solid var(--b);padding:4px 10px;border-radius:20px;margin:0 6px 6px 0}
+.chip i{cursor:pointer;color:var(--red);font-style:normal}
+#toast{position:fixed;bottom:16px;right:16px;background:var(--p);border:1px solid var(--gold);padding:10px 14px;border-radius:6px;display:none;max-width:380px;z-index:9}
+textarea{width:100%;height:70px}.hint{color:var(--m);font-size:12px;margin-top:6px}
+</style></head><body>
+<nav><span class="logo">Alpha<b>Screen</b></span>
+<div id="sw"><input id="q" placeholder="Search stock or ETF (US / India) · press Enter" onkeydown="if(event.key=='Enter')search()"><div id="res"></div></div>
+<a id="n-co" onclick="go('co')">Company</a><a id="n-cmp" onclick="go('cmp')">Compare</a><a id="n-wl" onclick="go('wl')">Watchlist &amp; Screens</a><a onclick="setKey()">API key</a></nav>
+<main id="app"></main><div id="toast"></div>
+<script>
+const S={},$=s=>document.querySelector(s),sleep=ms=>new Promise(r=>setTimeout(r,ms));
+let KEY=localStorage.avk||'BU7GLIFHHPES57BF',view='co',cur=null,last=0;
+let cmp=JSON.parse(localStorage.cmp||'[]'),wl=JSON.parse(localStorage.wl||'[]');
+const save=()=>{localStorage.cmp=JSON.stringify(cmp);localStorage.wl=JSON.stringify(wl)};
+const toast=(m,ms=4000)=>{const t=$('#toast');t.textContent=m;t.style.display='block';clearTimeout(t.h);if(ms)t.h=setTimeout(()=>t.style.display='none',ms)};
+const P=v=>{const x=parseFloat(v);return isNaN(x)?null:x};
+const n=(v,d=2)=>v==null||isNaN(v)?'–':Number(v).toLocaleString('en-IN',{maximumFractionDigits:d});
+const setKey=()=>{const k=prompt('Alpha Vantage API key',KEY);if(k){KEY=k.trim();localStorage.avk=KEY}};
+
+async function av(q){
+  const ck='av:'+q;
+  try{const c=JSON.parse(localStorage[ck]||'null');if(c&&Date.now()-c.t<432e5)return c.d}catch(e){}
+  const w=1200-(Date.now()-last);if(w>0)await sleep(w);last=Date.now();
+  const d=await(await fetch(`https://www.alphavantage.co/query?${q}&apikey=${KEY}`)).json();
+  const err=d.Note||d.Information||d['Error Message'];if(err)throw new Error(err);
+  try{localStorage[ck]=JSON.stringify({t:Date.now(),d})}catch(e){Object.keys(localStorage).filter(k=>k.startsWith('av:')).forEach(k=>delete localStorage[k])}
+  return d}
+
+async function load(sym){
+  if(S[sym])return S[sym];
+  const o={sym,warn:[]},g=async(f,x='')=>{try{return await av(`function=${f}&symbol=${sym}${x}`)}catch(e){o.warn.push(e.message);return{}}};
+  toast(`Loading ${sym}… (uses ~6 API calls, cached 12h)`,0);
+  o.q=(await g('GLOBAL_QUOTE'))['Global Quote']||{};
+  o.ov=await g('OVERVIEW');
+  const i=await g('INCOME_STATEMENT'),b=await g('BALANCE_SHEET'),c=await g('CASH_FLOW'),t=await g('TIME_SERIES_DAILY','&outputsize=compact');
+  o.inc=(i.annualReports||[]).slice(0,5).reverse();o.bs=(b.annualReports||[]).slice(0,5).reverse();o.cf=(c.annualReports||[]).slice(0,5).reverse();
+  o.ts=Object.entries(t['Time Series (Daily)']||{}).map(([d,v])=>({d,c:+v['4. close']})).reverse();
+  o.cur=o.ov.Currency||(/\.(BSE|NSE)$/i.test(sym)?'INR':'USD');
+  if(!o.q['05. price']&&!o.ts.length)throw new Error(o.warn[0]||'No data returned for '+sym);
+  S[sym]=o;$('#toast').style.display='none';
+  if(o.warn.length)toast(o.warn[0],8000);
+  return o}
+
+const at=(a,d)=>a.find(x=>x.fiscalDateEnding==d)||{};
+const mon=d=>new Date(d).toLocaleDateString('en-GB',{month:'short',year:'2-digit'});
+const sc=o=>o.cur=='INR'?1e7:1e6,unit=o=>o.cur=='INR'?'₹ Cr':o.cur+' M';
+function M(o){
+  const v=o.ov||{},p=k=>P(v[k]),q=o.q||{},li=o.inc[o.inc.length-1]||{},lb=o.bs[o.bs.length-1]||{};
+  const debt=P(lb.shortLongTermDebtTotal)??((P(lb.longTermDebt)||0)+(P(lb.shortTermDebt)||0)),eq=P(lb.totalShareholderEquity);
+  const r0=P(o.inc[0]?.totalRevenue),r1=P(li.totalRevenue),y=o.inc.length-1;
+  const px=P(q['05. price'])??(o.ts.length?o.ts[o.ts.length-1].c:null);
+  return{price:px,chg:P((q['10. change percent']||'').replace('%','')),mcap:p('MarketCapitalization'),pe:p('PERatio'),pb:p('PriceToBookRatio'),peg:p('PEGRatio'),evebitda:p('EVToEBITDA'),
+   beta:p('Beta'),dy:p('DividendYield')!=null?p('DividendYield')*100:null,eps:p('EPS'),roe:p('ReturnOnEquityTTM')!=null?p('ReturnOnEquityTTM')*100:null,
+   roa:p('ReturnOnAssetsTTM')!=null?p('ReturnOnAssetsTTM')*100:null,opm:p('OperatingMarginTTM')!=null?p('OperatingMarginTTM')*100:null,npm:p('ProfitMargin')!=null?p('ProfitMargin')*100:null,
+   de:eq?debt/eq:null,cr:P(lb.totalCurrentAssets)/P(lb.totalCurrentLiabilities)||null,growth:y>0&&r0>0&&r1>0?(Math.pow(r1/r0,1/y)-1)*100:null,hi:p('52WeekHigh'),lo:p('52WeekLow'),bv:p('BookValue')}}
+
+const CMP=[['Price','price',0],['Market Cap','mcap',0],['P/E','pe',-1],['P/B','pb',-1],['PEG','peg',-1],['EV/EBITDA','evebitda',-1],['Beta','beta',0],['Dividend Yield %','dy',1],['EPS','eps',1],['ROE %','roe',1],['ROA %','roa',1],['Operating Margin %','opm',1],['Net Margin %','npm',1],['Debt / Equity','de',-1],['Current Ratio','cr',1],['Revenue CAGR %','growth',1],['52W High','hi',0],['52W Low','lo',0]];
+const ROWS={inc:[['Revenue','totalRevenue'],['Cost of Revenue','costOfRevenue'],['Gross Profit','grossProfit'],['Operating Income','operatingIncome'],['EBITDA','ebitda'],['Depreciation & Amortisation','depreciationAndAmortization'],['Interest Expense','interestExpense'],['Profit Before Tax','incomeBeforeTax'],['Tax','incomeTaxExpense'],['Net Profit','netIncome']],
+ bs:[['Total Assets','totalAssets'],['Current Assets','totalCurrentAssets'],['Inventory','inventory'],['Receivables','currentNetReceivables'],['Cash & Equivalents','cashAndCashEquivalentsAtCarryingValue'],['Total Liabilities','totalLiabilities'],['Current Liabilities','totalCurrentLiabilities'],['Payables','currentAccountsPayable'],['Long-term Debt','longTermDebt'],['Total Debt','shortLongTermDebtTotal'],['Shareholder Equity','totalShareholderEquity']],
+ cf:[['Operating Cash Flow','operatingCashflow'],['Capex','capitalExpenditures'],['Investing Cash Flow','cashflowFromInvestment'],['Financing Cash Flow','cashflowFromFinancing'],['Dividends Paid','dividendPayout'],['Net Income','netIncome']]};
+const TN={inc:'Income Statement',bs:'Balance Sheet',cf:'Cash Flow'};
+
+function RAT(o){
+  const R=[['Revenue Growth %',[]],['Gross Margin %',[]],['Operating Margin %',[]],['Net Margin %',[]],['ROE %',[]],['ROA %',[]],['Debt / Equity',[]],['Current Ratio',[]],['Interest Coverage (x)',[]],['Asset Turnover (x)',[]],['Free Cash Flow',[]],['OCF / Net Profit (x)',[]]];
+  const f=(a,b,k=1)=>a!=null&&b?a/b*k:null;
+  o.inc.forEach((x,i)=>{const b=at(o.bs,x.fiscalDateEnding),c=at(o.cf,x.fiscalDateEnding),rv=P(x.totalRevenue),ni=P(x.netIncome),eq=P(b.totalShareholderEquity);
+   const debt=P(b.shortLongTermDebtTotal)??((P(b.longTermDebt)||0)+(P(b.shortTermDebt)||0)),fcf=P(c.operatingCashflow)!=null?P(c.operatingCashflow)-Math.abs(P(c.capitalExpenditures)||0):null;
+   const v=[i?f(rv-P(o.inc[i-1].totalRevenue),P(o.inc[i-1].totalRevenue),100):null,f(P(x.grossProfit),rv,100),f(P(x.operatingIncome),rv,100),f(ni,rv,100),f(ni,eq,100),f(ni,P(b.totalAssets),100),f(debt,eq),f(P(b.totalCurrentAssets),P(b.totalCurrentLiabilities)),f(P(x.operatingIncome),P(x.interestExpense)),f(rv,P(b.totalAssets)),fcf,f(P(c.operatingCashflow),ni)];
+   v.forEach((z,j)=>R[j][1].push(z))});
+  return R}
+
+function chart(series){
+  const W=700,H=210,cols=['#2dd4bf','#ff6b5e','#e9b949','#8ab4ff','#c792ea'];
+  const all=series.flatMap(s=>s.pts);if(!all.length)return'<p class="sub">No price history available.</p>';
+  const lo=Math.min(...all),hi=Math.max(...all);
+  return`<svg viewBox="0 0 ${W} ${H}" style="width:100%"><g stroke="#243040">${[0,1,2,3].map(i=>`<line x1="0" x2="${W}" y1="${10+i*63}" y2="${10+i*63}"/>`).join('')}</g>`+
+  series.map((s,k)=>`<polyline fill="none" stroke="${cols[k%5]}" stroke-width="2" points="${s.pts.map((v,i)=>`${(i/(s.pts.length-1||1)*W).toFixed(1)},${(H-10-(v-lo)/(hi-lo||1)*(H-20)).toFixed(1)}`).join(' ')}"/>`).join('')+
+  `<text x="4" y="22" fill="#7d8b9b" font-size="11" font-family="IBM Plex Mono">${n(hi)}</text><text x="4" y="${H-14}" fill="#7d8b9b" font-size="11" font-family="IBM Plex Mono">${n(lo)}</text></svg>`+
+  `<div>${series.map((s,k)=>`<span class="chip" style="border-color:${cols[k%5]}">${s.n}</span>`).join('')}</div>`}
+
+function table(o,key){
+  const sc_=sc(o),rows=ROWS[key].filter(([l,k])=>o[key].some(x=>P(x[k])!=null));
+  if(!rows.length)return'<p class="sub">Not available.</p>';
+  return`<div class="w"><table><tr><th>${TN[key]} (${unit(o)})</th>${o[key].map(x=>`<th>${mon(x.fiscalDateEnding)}</th>`).join('')}</tr>`+
+  rows.map(([l,k])=>`<tr><td>${l}</td>${o[key].map(x=>`<td>${n(P(x[k])/sc_,0)}</td>`).join('')}</tr>`).join('')+'</table></div>'}
+
+function proscons(o){
+  const m=M(o),pro=[],con=[],a=(c,t,x)=>{if(c)(x?con:pro).push(t)};
+  a(m.roe>15,`Healthy ROE of ${n(m.roe,1)}%`);a(m.de!=null&&m.de<.5,`Low debt (D/E ${n(m.de)})`);a(m.growth>10,`Revenue CAGR of ${n(m.growth,1)}%`);
+  a(m.npm>15,`Strong net margin of ${n(m.npm,1)}%`);a(m.dy>2,`Dividend yield ${n(m.dy,1)}%`);a(m.cr>1.5,`Comfortable current ratio ${n(m.cr)}`);
+  a(m.pe>40,`Expensive valuation, P/E ${n(m.pe,1)}`,1);a(m.de>1.5,`High leverage (D/E ${n(m.de)})`,1);a(m.growth<0,`Revenue shrinking (${n(m.growth,1)}% CAGR)`,1);
+  a(m.npm!=null&&m.npm<5,`Thin net margin ${n(m.npm,1)}%`,1);a(m.roe!=null&&m.roe<8,`Low ROE ${n(m.roe,1)}%`,1);a(m.cr!=null&&m.cr<1,`Current ratio below 1 (${n(m.cr)})`,1);a(m.beta>1.3,`High volatility, beta ${n(m.beta)}`,1);
+  return`<div class="pc"><div class="pro"><h2>Pros</h2><ul>${pro.map(x=>`<li>${x}</li>`).join('')||'<li class="sub">None flagged</li>'}</ul></div><div class="con"><h2>Cons</h2><ul>${con.map(x=>`<li>${x}</li>`).join('')||'<li class="sub">None flagged</li>'}</ul></div></div>`}
+
+function render(){
+  ['co','cmp','wl'].forEach(v=>$('#n-'+v).classList.toggle('on',v==view));
+  const A=$('#app');
+  if(view=='co')A.innerHTML=cur?company(S[cur]):welcome();
+  if(view=='cmp')A.innerHTML=compare();
+  if(view=='wl')A.innerHTML=watch()}
+const go=v=>{view=v;render()};
+
+function welcome(){return`<div class="card"><h1>Screen, analyse &amp; compare</h1><p class="sub">Search any US or Indian stock / ETF above. Indian tickers use the <b>.BSE</b> suffix (e.g. <code>RELIANCE.BSE</code>, <code>TCS.BSE</code>); US tickers are plain (<code>AAPL</code>, <code>SPY</code>).</p>
+<p class="sub">Data: Alpha Vantage free tier — 25 calls/day. Each new company costs ~6 calls; results are cached 12 hours in your browser.</p>
+<div>${['AAPL','MSFT','SPY','RELIANCE.BSE','TCS.BSE','HINDUNILVR.BSE'].map(s=>`<button class="g" style="margin:0 6px 6px 0" onclick="openCo('${s}')">${s}</button>`).join('')}</div></div>`}
+
+function company(o){
+  const m=M(o),v=o.ov,cu=o.cur,inW=wl.includes(o.sym),inC=cmp.includes(o.sym),mc=m.mcap?(cu=='INR'?n(m.mcap/1e7,0)+' Cr':n(m.mcap/1e9,2)+' B'):'–';
+  const items=[['Market Cap',mc],['Price',n(m.price)],['52W High / Low',n(m.hi)+' / '+n(m.lo)],['P/E',n(m.pe)],['P/B',n(m.pb)],['PEG',n(m.peg)],['EV/EBITDA',n(m.evebitda)],['Beta',n(m.beta)],['Dividend Yield',n(m.dy)+'%'],['EPS',n(m.eps)],['Book Value',n(m.bv)],['ROE',n(m.roe,1)+'%'],['ROA',n(m.roa,1)+'%'],['Op. Margin',n(m.opm,1)+'%'],['Net Margin',n(m.npm,1)+'%'],['Debt / Equity',n(m.de)],['Current Ratio',n(m.cr)],['Revenue CAGR',n(m.growth,1)+'%']];
+  const rt=RAT(o),yrs=o.inc;
+  return`<div class="card"><div class="row"><div><h1>${v.Name||o.sym} <span class="sub mono">${o.sym}</span></h1><div class="sub">${[v.Exchange,v.Sector,v.Industry,cu].filter(Boolean).join(' · ')}</div></div>
+  <div style="text-align:right"><div class="mono" style="font-size:26px">${n(m.price)} <small>${cu}</small></div><div class="${m.chg>=0?'up':'dn'} mono">${m.chg!=null?(m.chg>=0?'+':'')+n(m.chg)+'%':''}</div></div></div>
+  <div style="margin-top:12px"><button onclick="toggleWl('${o.sym}')" class="g">${inW?'★ In watchlist':'☆ Add to watchlist'}</button> <button onclick="toggleCmp('${o.sym}')" class="g">${inC?'✓ In compare':'+ Add to compare'}</button> <button onclick="xl([S['${o.sym}']])">⬇ Excel report</button></div>
+  ${v.Description?`<p class="sub" style="max-height:64px;overflow:hidden">${v.Description}</p>`:''}</div>
+  <div class="card"><h2>Top ratios</h2><div class="grid">${items.map(([k,x])=>`<div><span class="k">${k}</span><span class="mono">${x}</span></div>`).join('')}</div></div>
+  <div class="card"><h2>Price · last 100 sessions</h2>${chart([{n:o.sym,pts:o.ts.map(t=>t.c)}])}</div>
+  <div class="card">${proscons(o)}</div>
+  ${['inc','bs','cf'].map(k=>`<div class="card">${table(o,k)}</div>`).join('')}
+  <div class="card"><div class="w"><table><tr><th>Ratios</th>${yrs.map(x=>`<th>${mon(x.fiscalDateEnding)}</th>`).join('')}</tr>${rt.map(([l,a])=>`<tr><td>${l}</td>${a.map(z=>`<td>${l=='Free Cash Flow'?n(z/sc(o),0):n(z)}</td>`).join('')}</tr>`).join('')}</table></div></div>`}
+
+function compare(){
+  const list=cmp.map(s=>S[s]).filter(Boolean);
+  let h=`<div class="card"><h2>Compare stocks &amp; ETFs</h2><div>${cmp.map(s=>`<span class="chip">${s}<i onclick="toggleCmp('${s}')">×</i></span>`).join('')||'<span class="sub">Nothing added yet.</span>'}</div>
+  <div class="row" style="justify-content:flex-start;margin-top:8px"><input id="ci" placeholder="Add symbol e.g. MSFT or TCS.BSE" onkeydown="if(event.key=='Enter')addC()"><button onclick="addC()">Add</button>${list.length?`<button onclick="xl(cmp.map(s=>S[s]))">⬇ Download Excel report</button>`:''}</div></div>`;
+  if(list.length<1)return h;
+  const ms=list.map(M),lead={};list.forEach(o=>lead[o.sym]=0);
+  const rows=CMP.map(([l,k,d])=>{const vals=ms.map(m=>m[k]);let b=-1;
+    if(d&&list.length>1){const ok=vals.map((x,i)=>[x,i]).filter(([x])=>x!=null&&(d>0||x>0));if(ok.length>1){b=ok.reduce((a,c)=>(d>0?c[0]>a[0]:c[0]<a[0])?c:a)[1];lead[list[b].sym]++}}
+    return`<tr><td>${l}</td>${vals.map((x,i)=>`<td class="${i==b?'best':''}">${n(x,k=='mcap'?0:2)}</td>`).join('')}</tr>`}).join('');
+  h+=`<div class="card"><div class="w"><table><tr><th>Metric</th>${list.map(o=>`<th>${o.sym}</th>`).join('')}</tr>${rows}</table></div>
+  <p class="sub">Highlighted = best value for that ratio. Leads: ${list.map(o=>`${o.sym} ${lead[o.sym]}`).join(' · ')}</p></div>
+  <div class="card"><h2>Price rebased to 100</h2>${chart(list.map(o=>({n:o.sym,pts:o.ts.map(t=>t.c/o.ts[0].c*100)})))}</div>`;
+  ['Revenue Growth %','Operating Margin %','Net Margin %','ROE %','Debt / Equity','Current Ratio'].forEach(L=>{
+    h+=`<div class="card"><div class="w"><table><tr><th>${L}</th>${[0,1,2,3,4].map(i=>`<th>Yr ${i+1}</th>`).join('')}</tr>${list.map(o=>`<tr><td>${o.sym}</td>${RAT(o).find(r=>r[0]==L)[1].map(z=>`<td>${n(z)}</td>`).join('')}</tr>`).join('')}</table></div></div>`});
+  return h}
+
+function watch(){
+  const q=localStorage.sq||'pe < 30 AND roe > 15 AND beta < 1.3';
+  return`<div class="card"><h2>Watchlist</h2><div>${wl.map(s=>`<span class="chip"><a style="cursor:pointer" onclick="openCo('${s}')">${s}</a><i onclick="toggleWl('${s}')">×</i></span>`).join('')||'<span class="sub">Empty — open a company and tap ☆.</span>'}</div></div>
+  <div class="card"><h2>Custom screen</h2><textarea id="sq">${q}</textarea><div class="hint">Fields: price mcap(in billions) pe pb peg evebitda beta dy eps roe roa opm npm de cr growth · operators: &gt; &lt; &gt;= &lt;= = · join with AND</div>
+  <p><button onclick="runScreen()">Run screen on watchlist</button></p><div id="sr"></div></div>`}
+
+async function runScreen(){
+  const q=$('#sq').value;localStorage.sq=q;
+  const cs=[...q.toLowerCase().matchAll(/(\w+)\s*(>=|<=|>|<|=)\s*(-?[\d.]+)/g)];
+  for(const s of wl)try{await load(s)}catch(e){toast(e.message,6000)}
+  const ok=wl.filter(s=>S[s]).map(s=>[s,M(S[s])]).filter(([s,m])=>cs.every(([,k,op,v])=>{let x=k=='mcap'?m.mcap/1e9:m[k];v=+v;if(x==null)return false;return op=='>'?x>v:op=='<'?x<v:op=='>='?x>=v:op=='<='?x<=v:x==v}));
+  $('#sr').innerHTML=ok.length?`<div class="w"><table><tr><th>Symbol</th><th>Price</th><th>P/E</th><th>ROE %</th><th>Beta</th><th>Net Margin %</th><th>D/E</th></tr>${ok.map(([s,m])=>`<tr><td><a style="cursor:pointer;color:var(--teal)" onclick="openCo('${s}')">${s}</a></td><td>${n(m.price)}</td><td>${n(m.pe)}</td><td>${n(m.roe,1)}</td><td>${n(m.beta)}</td><td>${n(m.npm,1)}</td><td>${n(m.de)}</td></tr>`).join('')}</table></div>`:'<p class="sub">No watchlist stock matches.</p>'}
+
+async function search(){
+  const q=$('#q').value.trim();if(!q)return;toast('Searching…',0);
+  try{const d=await av('function=SYMBOL_SEARCH&keywords='+encodeURIComponent(q)),r=d.bestMatches||[];$('#toast').style.display='none';
+    const R=$('#res');R.style.display='block';
+    R.innerHTML=`<div onclick="openCo('${q.toUpperCase()}')"><b>Open “${q.toUpperCase()}” as typed</b></div>`+r.map(x=>`<div onclick="openCo('${x['1. symbol']}')"><b class="mono">${x['1. symbol']}</b> ${x['2. name']}<br><small>${x['3. type']} · ${x['4. region']} · ${x['8. currency']}</small></div>`).join('')}
+  catch(e){toast(e.message,8000)}}
+document.addEventListener('click',e=>{if(!e.target.closest('#sw'))$('#res').style.display='none'});
+
+async function openCo(s){$('#res').style.display='none';try{await load(s);cur=s;view='co';render();scrollTo(0,0)}catch(e){toast(e.message,8000)}}
+function toggleWl(s){wl=wl.includes(s)?wl.filter(x=>x!=s):[...wl,s];save();render()}
+function toggleCmp(s){cmp=cmp.includes(s)?cmp.filter(x=>x!=s):[...cmp,s];save();render()}
+async function addC(){const s=$('#ci').value.trim().toUpperCase();if(!s)return;try{await load(s);if(!cmp.includes(s))cmp.push(s);save();render()}catch(e){toast(e.message,8000)}}
+
+function xl(list){
+  const wb=XLSX.utils.book_new(),A=(nm,a)=>{const ws=XLSX.utils.aoa_to_sheet(a);ws['!cols']=[{wch:44},...Array(40).fill({wch:13})];XLSX.utils.book_append_sheet(wb,ws,nm)};
+  const names=list.map(o=>o.ov.Name||o.sym).join(' vs ');
+  A('Cover',[['Stock Analysis Report'],[names],[],['Source','Alpha Vantage (annual statements, overview, daily prices)'],['Generated',new Date().toISOString().slice(0,10)],['Currency / units',list.map(o=>`${o.sym}: ${unit(o)}`).join(' | ')],['Note','Educational use only. Not investment, financial or professional advice.']]);
+  const ms=list.map(M);
+  A('Overview',[['Metric',...list.map(o=>o.sym),'Leader'],...CMP.map(([l,k,d])=>{const v=ms.map(m=>m[k]);let w='';
+    if(d&&list.length>1){const ok=v.map((x,i)=>[x,i]).filter(([x])=>x!=null&&(d>0||x>0));if(ok.length>1)w=list[ok.reduce((a,c)=>(d>0?c[0]>a[0]:c[0]<a[0])?c:a)[1]].sym}
+    return[l,...v,w]})]);
+  const blk=(rows,get)=>{const h1=['Particular'],h2=[''];list.forEach(o=>{for(let i=0;i<5;i++){h1.push(i?'':o.sym);h2.push('')}h1.push('');h2.push('')});return h1};
+  [['inc'],['bs'],['cf']].forEach(([k])=>{
+    const h1=[`${TN[k]} (figures in reporting units: ₹ Cr for INR, millions otherwise)`],h2=['Particular'];
+    list.forEach(o=>{for(let i=0;i<5;i++){h1.push(i?'':o.sym);h2.push(o[k][i]?mon(o[k][i].fiscalDateEnding):'')}h1.push('');h2.push('')});
+    A(TN[k],[h1,h2,...ROWS[k].map(([l,f])=>[l,...list.flatMap(o=>[...Array(5).fill(0).map((_,i)=>o[k][i]&&P(o[k][i][f])!=null?+(P(o[k][i][f])/sc(o)).toFixed(2):''),''])])])});
+  const h1=['Ratios'],h2=['Ratio'];list.forEach(o=>{for(let i=0;i<5;i++){h1.push(i?'':o.sym);h2.push(o.inc[i]?mon(o.inc[i].fiscalDateEnding):'')}h1.push('');h2.push('')});
+  const rs=list.map(RAT);
+  A('Ratios',[h1,h2,...rs[0].map(([l],j)=>[l,...rs.flatMap((r,x)=>[...Array(5).fill(0).map((_,i)=>{const z=r[j][1][i];return z==null?'':+(l=='Free Cash Flow'?z/sc(list[x]):z).toFixed(2)}),''])])]);
+  XLSX.writeFile(wb,`${list.map(o=>o.sym.replace(/\W/g,'_')).join('_vs_')}_Report.xlsx`)}
+render();
+</script></body></html>
